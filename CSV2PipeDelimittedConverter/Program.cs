@@ -3,7 +3,6 @@ using Serilog;
 using System;
 using System.Data;
 using System.IO;
-using Serilog;
 
 class CSV2PipeDelimittedConverter
 {
