@@ -1,17 +1,35 @@
-﻿using System;
+﻿using ExcelDataReader;
+using Serilog;
+using System;
 using System.Data;
 using System.IO;
-using ExcelDataReader;
+using Serilog;
 
 class CSV2PipeDelimittedConverter
 {
+    const int MAX_RETRIES = 5;
+    const int DELAY_DURATION = 2000;
+    const string ROOT_FOLDER = $"C:\\CSVConverter";
+    const string FILE_TO_PROCESS = "ZANCINP.xls";
+
     static void Main(string[] args)
     {
-        string inputFolder = @"C:\CSVConverter";
-        string outputFolder = @"C:\CSVConverter\Output";
-        string inputFile = Path.Combine(inputFolder, "ZANCINP.xls");
+        string dateNow = DateTime.Now.ToString("yyyyMMdd");
+
+        Log.Logger = new LoggerConfiguration()
+            .MinimumLevel.Information()
+            .WriteTo.Console()
+            .WriteTo.File($"{ROOT_FOLDER}\\Logs\\converter.log", rollingInterval: RollingInterval.Day)
+            .CreateLogger();
+
+        string inputFolder = ROOT_FOLDER;
+        string outputFolder = $"{ROOT_FOLDER}\\Output";
+        string backupFolder = $"{ROOT_FOLDER}\\Backup";
+
+        string inputFile = Path.Combine(inputFolder, FILE_TO_PROCESS);
 
         // Ensure folders exist
+        Directory.CreateDirectory(backupFolder);
         Directory.CreateDirectory(inputFolder);
         Directory.CreateDirectory(outputFolder);
 
@@ -22,7 +40,7 @@ class CSV2PipeDelimittedConverter
         {
             if (!File.Exists(inputFile))
             {
-                Console.WriteLine($"File not found: {inputFile}");
+                Log.Warning($"File not found: {inputFile}");
                 return;
             }
 
@@ -31,11 +49,20 @@ class CSV2PipeDelimittedConverter
 
             ConvertExcelToPipe(inputFile, outputFile);
 
-            Console.WriteLine($"File converted successfully: {outputFile}");
+            // Backup the processed file
+            Log.Information($"Backing up the processed file.");
+            string destPath = Path.Combine(backupFolder, $"ZANCINP_{timestamp}.xls");
+            File.Move(inputFile, destPath);
+
+            Log.Information($"File converted successfully: {outputFile}");
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error: {ex.Message}");
+            Log.Error($"Error: {ex.Message}");
+        }
+        finally
+        {
+            Log.CloseAndFlush();
         }
     }
 
@@ -45,19 +72,16 @@ class CSV2PipeDelimittedConverter
         {
             if (!File.Exists(inputFile))
             {
-                Console.WriteLine($"Input file does not exist: {inputFile}");
+                Log.Warning($"Input file does not exist: {inputFile}");
                 return;
             }
 
-            using (var stream = File.Open(inputFile, FileMode.Open, FileAccess.Read))
+            using (var stream = OpenFileWithRetry(inputFile))
             {
                 using (var reader = ExcelReaderFactory.CreateReader(stream))
                 {
                     var result = reader.AsDataSet();
-
-                    // Get first sheet
                     DataTable table = result.Tables[0];
-
                     using (StreamWriter writer = new StreamWriter(outputFile))
                     {
                         foreach (DataRow row in table.Rows)
@@ -75,23 +99,35 @@ class CSV2PipeDelimittedConverter
                     }
                 }
             }
-
         }
         catch (FileNotFoundException ex)
         {
-            Console.WriteLine($"File not found: {ex.FileName}");
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            Console.WriteLine("Access denied. Check permissions.");
-        }
-        catch (IOException ex)
-        {
-            Console.WriteLine("I/O error occurred: " + ex.Message);
+            Log.Error($"File not found: {ex.FileName}");
         }
         catch (Exception ex)
         {
-            Console.WriteLine("Unexpected error: " + ex.Message);
+            Log.Error("Unexpected error: " + ex.Message);
         }
+    }
+
+    static FileStream OpenFileWithRetry(string path, int maxRetries = MAX_RETRIES, int delayMs = DELAY_DURATION)
+    {
+        for (int attempt = 1; attempt <= maxRetries; attempt++)
+        {
+            try
+            {
+                return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
+            }
+            catch (IOException)
+            {
+                if (attempt == maxRetries)
+                    throw;
+
+                Log.Warning($"File is locked. Retrying {attempt}/{maxRetries}...");
+                System.Threading.Thread.Sleep(delayMs);
+            }
+        }
+
+        throw new Exception("Unable to open file after retries.");
     }
 }
