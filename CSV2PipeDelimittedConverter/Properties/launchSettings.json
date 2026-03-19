@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "CSV2PipeDelimittedConverter": {
+      "commandName": "Project"
+    },
+    "Container (Dockerfile)": {
+      "commandName": "Docker"
+    }
+  }
+}
